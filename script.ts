@@ -8,6 +8,17 @@ interface Troca {
   km?: number;
 }
 
+interface Specs {
+  placa: string;
+  chassi: string;
+  cor: string;
+  ano: string;
+  modelo: string;
+  fabricante: string;
+  tanque: string; // litros
+  km: string;
+}
+
 interface Save {
   id: string;
   nome: string;
@@ -15,11 +26,14 @@ interface Save {
   limite: number | null; // null = sem limite definido
   trocas: Troca[];
   atualizado: string; // ISO
+  specs?: Partial<Specs>;
+  obs?: string;
 }
 
 const CHAVE = "controle-manutencao-v1";
-const LIMITE_MAX = 5000;
+const LIMITE_MAX = 25000;
 const LIMITE_PADRAO = 500;
+let editandoId: string | null = null;
 
 const app = document.getElementById("app") as HTMLElement;
 
@@ -185,13 +199,22 @@ function telaSave(s: Save): string {
   const ordenadas = [...s.trocas].sort((a, b) => b.data.localeCompare(a.data));
 
   const linhas = ordenadas.map((t) => `
-    <tr>
-      <td>${esc(t.peca)}</td>
-      <td>${dataBR(t.data)}</td>
-      <td class="num">${t.km ? t.km.toLocaleString("pt-BR") + " km" : "—"}</td>
-      <td class="num">${brl(t.custo)}</td>
-      <td class="num"><button class="link perigo" data-acao="apagar-troca" data-id="${t.id}" title="Remover">✕</button></td>
-    </tr>`).join("");
+    <li class="item">
+      <div class="item-info">
+        <b>${esc(t.peca)}</b>
+        <small>${dataBR(t.data)}${t.km ? " · " + t.km.toLocaleString("pt-BR") + " km" : ""}</small>
+      </div>
+      <span class="item-valor">${brl(t.custo)}</span>
+      <div class="item-acoes">
+        <button class="icone" data-acao="editar-troca" data-id="${t.id}" aria-label="Editar">✏️</button>
+        <button class="icone perigo" data-acao="apagar-troca" data-id="${t.id}" aria-label="Remover">🗑️</button>
+      </div>
+    </li>`).join("");
+
+  const ed = editandoId ? s.trocas.find((t) => t.id === editandoId) : undefined;
+  const sp = s.specs ?? {};
+  const campo = (k: keyof Specs, rotulo: string, extra = "") =>
+    `<label>${rotulo}<input type="text" name="${k}" value="${esc(sp[k] ?? "")}" ${extra}></label>`;
 
   return `
     <div class="topo">
@@ -210,24 +233,43 @@ function telaSave(s: Save): string {
 
     <section class="painel" id="painel-limite">${blocoLimite(s)}</section>
 
-    <section class="painel">
-      <h2>Registrar troca</h2>
+    <section class="painel" id="painel-troca">
+      <h2>${ed ? "Editar troca" : "Registrar troca"}</h2>
       <form class="form" id="form-troca">
-        <label>Peça / serviço<input type="text" name="peca" placeholder="Ex.: Óleo, pastilha..." required maxlength="60"></label>
-        <label>Valor (R$)<input type="number" name="custo" min="0" step="0.01" required></label>
-        <label>Data<input type="date" name="data" value="${hojeISO()}" required></label>
-        <label>Km (opcional)<input type="number" name="km" min="0" step="1"></label>
-        <button class="primario" type="submit">Adicionar</button>
+        <label class="f-peca">Peça / serviço<input type="text" name="peca" placeholder="Ex.: Óleo, pastilha..." required maxlength="60" value="${esc(ed?.peca ?? "")}"></label>
+        <label>Valor (R$)<input type="number" name="custo" min="0" step="0.01" inputmode="decimal" required value="${ed?.custo ?? ""}"></label>
+        <label>Data<input type="date" name="data" value="${ed?.data ?? hojeISO()}" required></label>
+        <label>Km (opcional)<input type="number" name="km" min="0" step="1" inputmode="numeric" value="${ed?.km ?? ""}"></label>
+        <div class="f-botoes">
+          <button class="primario" type="submit">${ed ? "Salvar alteração" : "Adicionar"}</button>
+          ${ed ? `<button type="button" data-acao="cancelar-edicao">Cancelar</button>` : ""}
+        </div>
       </form>
     </section>
 
     <section class="painel">
       <h2>Histórico</h2>
-      ${s.trocas.length === 0 ? `<p class="vazio">Nenhuma troca registrada.</p>` : `
-      <table>
-        <thead><tr><th>Peça</th><th>Data</th><th class="num">Km</th><th class="num">Valor</th><th></th></tr></thead>
-        <tbody>${linhas}</tbody>
-      </table>`}
+      ${s.trocas.length === 0 ? `<p class="vazio">Nenhuma troca registrada.</p>` : `<ul class="lista">${linhas}</ul>`}
+    </section>
+
+    <section class="painel">
+      <h2>Especificações do veículo</h2>
+      <form id="form-specs">
+        <div class="specs">
+          ${campo("placa", "Placa", 'maxlength="8" autocapitalize="characters"')}
+          ${campo("chassi", "Chassi", 'maxlength="20" autocapitalize="characters"')}
+          ${campo("fabricante", "Fabricante")}
+          ${campo("modelo", "Modelo")}
+          ${campo("cor", "Cor")}
+          ${campo("ano", "Ano", 'inputmode="numeric" maxlength="9"')}
+          ${campo("tanque", "Tanque (litros)", 'inputmode="decimal"')}
+          ${campo("km", "Quilometragem atual", 'inputmode="numeric"')}
+        </div>
+        <label class="obs">Observações
+          <textarea name="obs" rows="4" placeholder="Anotações, lembretes, seguro, revisões...">${esc(s.obs ?? "")}</textarea>
+        </label>
+        <button class="primario" type="submit">Salvar especificações</button>
+      </form>
     </section>`;
 }
 
@@ -244,8 +286,10 @@ function blocoLimite(s: Save): string {
     <h2>Limite mensal <button class="link" data-acao="remover-limite">remover</button></h2>
     <div class="limite-linha">
       <span class="limite-valor" id="limite-valor">${brl(s.limite)}</span>
-      <input type="range" id="limite-range" min="0" max="${LIMITE_MAX}" step="50" value="${Math.min(s.limite, LIMITE_MAX)}" aria-label="Limite mensal">
+      <input type="number" id="limite-num" min="0" max="${LIMITE_MAX}" step="50" inputmode="numeric" value="${s.limite}" aria-label="Limite em reais">
     </div>
+    <input type="range" id="limite-range" min="0" max="${LIMITE_MAX}" step="50" value="${Math.min(s.limite, LIMITE_MAX)}" aria-label="Limite mensal">
+    <div class="range-escala"><span>R$ 0</span><span>R$ 25 mil</span></div>
     <div class="barra"><div id="barra-gasto"></div></div>
     <div class="aviso" id="aviso-limite"></div>`;
 }
@@ -292,7 +336,7 @@ app.addEventListener("click", (e) => {
     case "novo": criando = true; break;
     case "cancelar": criando = false; break;
     case "abrir": atualId = alvo.dataset.id as string; break;
-    case "voltar-saves": atualId = null; break;
+    case "voltar-saves": atualId = null; editandoId = null; break;
     case "exportar": exportarJSON(); return;
     case "importar": (document.getElementById("arquivo") as HTMLInputElement).click(); return;
     case "renomear": {
@@ -309,11 +353,18 @@ app.addEventListener("click", (e) => {
       }
       break;
     case "apagar-troca":
-      if (s) {
+      if (s && confirm("Remover esta troca?")) {
         s.trocas = s.trocas.filter((t) => t.id !== alvo.dataset.id);
+        if (editandoId === alvo.dataset.id) editandoId = null;
         tocar(s);
       }
       break;
+    case "editar-troca":
+      editandoId = alvo.dataset.id as string;
+      render();
+      document.getElementById("painel-troca")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    case "cancelar-edicao": editandoId = null; break;
     case "definir-limite":
       if (s) { s.limite = LIMITE_PADRAO; tocar(s); }
       break;
@@ -341,32 +392,53 @@ app.addEventListener("submit", (e) => {
     if (!s) return;
     const f = new FormData(form);
     const km = Number(f.get("km"));
-    s.trocas.push({
-      id: novoId(),
+    const dados = {
       peca: String(f.get("peca")).trim(),
       custo: Number(f.get("custo")),
       data: String(f.get("data")),
-      ...(km > 0 ? { km } : {}),
-    });
+      km: km > 0 ? km : undefined,
+    };
+    const existente = editandoId ? s.trocas.find((t) => t.id === editandoId) : undefined;
+    if (existente) Object.assign(existente, dados);
+    else s.trocas.push({ id: novoId(), ...dados });
+    editandoId = null;
     tocar(s);
     render();
+  } else if (form.id === "form-specs") {
+    const s = atual();
+    if (!s) return;
+    const f = new FormData(form);
+    const chaves: (keyof Specs)[] = ["placa", "chassi", "fabricante", "modelo", "cor", "ano", "tanque", "km"];
+    const specs: Partial<Specs> = {};
+    for (const k of chaves) specs[k] = String(f.get(k) ?? "").trim();
+    specs.placa = (specs.placa ?? "").toUpperCase();
+    specs.chassi = (specs.chassi ?? "").toUpperCase();
+    s.specs = specs;
+    s.obs = String(f.get("obs") ?? "").trim();
+    tocar(s);
+    render();
+    const btn = document.querySelector<HTMLButtonElement>("#form-specs button[type=submit]");
+    if (btn) { btn.textContent = "Salvo ✓"; setTimeout(() => (btn.textContent = "Salvar especificações"), 1500); }
   }
 });
 
 // Slider arrastável: atualiza ao vivo e salva ao soltar
 app.addEventListener("input", (e) => {
   const el = e.target as HTMLInputElement;
-  if (el.id !== "limite-range") return;
+  if (el.id !== "limite-range" && el.id !== "limite-num") return;
   const s = atual();
   if (!s) return;
-  s.limite = Number(el.value);
-  (document.getElementById("limite-valor") as HTMLElement).textContent = brl(s.limite);
+  const v = Math.max(0, Number(el.value) || 0);
+  s.limite = v;
+  (document.getElementById("limite-valor") as HTMLElement).textContent = brl(v);
+  if (el.id === "limite-range") (document.getElementById("limite-num") as HTMLInputElement).value = String(v);
+  else (document.getElementById("limite-range") as HTMLInputElement).value = String(Math.min(v, LIMITE_MAX));
   atualizarBarra(s);
 });
 
 app.addEventListener("change", (e) => {
   const el = e.target as HTMLInputElement;
-  if (el.id === "limite-range") {
+  if (el.id === "limite-range" || el.id === "limite-num") {
     const s = atual();
     if (s) tocar(s);
   } else if (el.id === "arquivo" && el.files && el.files[0]) {
